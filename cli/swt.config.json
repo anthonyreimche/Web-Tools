@@ -1,0 +1,7 @@
+{
+  "// notes": "Copy to swt.config.local.json (gitignored) for the optional `swt push` photo-service feature. The Worker URL is read from worker/.deployed.json automatically.",
+  "services": {
+    "flickr": { "apiKey": "", "apiSecret": "" },
+    "smugmug": { "apiKey": "", "apiSecret": "" }
+  }
+}

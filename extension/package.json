@@ -1,0 +1,12 @@
+{
+  "name": "safelight-web-tools-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.jsx --bundle --format=esm --jsx-factory=h --jsx-fragment=React.Fragment --external:react --external:react-dom --outfile=dist/index.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.5"
+  }
+}

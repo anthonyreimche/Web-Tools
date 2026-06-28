@@ -1,0 +1,9 @@
+{
+  "name": "safelight-web-tools-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "swt": "src/index.js"
+  }
+}

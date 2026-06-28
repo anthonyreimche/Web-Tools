@@ -1,0 +1,18 @@
+{
+  "name": "safelight-web-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Web gallery and publish services for Safelight: a client-proofing extension plus a companion Cloudflare service.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Anthony",
+  "workspaces": [
+    "extension",
+    "cli",
+    "worker"
+  ],
+  "scripts": {
+    "build:extension": "npm run build --workspace extension",
+    "deploy-worker": "node scripts/deploy-worker.mjs"
+  }
+}

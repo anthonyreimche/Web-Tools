@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+.dev.vars
+.wrangler/
+*.log
+
+# Local CLI working state + secrets — never commit.
+cli/swt.config.local.json
+cli/.swt-tokens.json
+worker/.deployed.json
+
+# dist/ is intentionally NOT ignored — the extension bundle must be committed
+# so the in-app store can install it without a build step.
