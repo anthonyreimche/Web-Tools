@@ -1,9 +1,13 @@
 // Safelight Web Tools — in-app extension (Cloudflare-only).
 //
-// Publishes a proofing or public gallery from the Library straight to your
+// Publishes proofing or public galleries from the Library straight to your
 // Cloudflare Worker, and polls the Worker for the client's picks/rejects,
 // applying them to the catalog. The app's CSP allows the Worker origin, so the
 // extension talks to it directly — no local helper, folder, or per-gallery setup.
+//
+// Galleries are folder-scoped and several can be live at once: publish one
+// folder's picks, switch folders and keep editing, and each gallery's decisions
+// sync back independently. The "Your galleries" list shows them grouped by folder.
 //
 // Set up once: deploy the Worker (`npm run deploy-worker`, or the manual steps in
 // the README), then paste the Worker URL + write key in Preferences → Web Tools.
@@ -12,7 +16,7 @@
 
 import {
   publishToCloud, startCloudPoller, checkCloudNow, cloudReady, cloudConfig, cloudShareLink,
-  useConnection, connColor,
+  useConnection, connColor, listGalleries, unpublishGallery,
 } from "./cloud.js";
 import { makeSetupWizard } from "./SetupWizard.jsx";
 
@@ -24,6 +28,7 @@ let stopCloud = null;
 function h(...args) { return React.createElement(...args); }
 
 const cat = () => api.stores.useCatalogStore;
+const uiStore = () => api.stores.useUIStore;
 
 function settings() {
   const g = (k, f) => api.settings.get(k, f);
@@ -35,7 +40,8 @@ function settings() {
   };
 }
 
-/** Best available in-catalog preview pixels for a photo, as a Blob. */
+/** Best available in-catalog preview pixels for a photo, as a Blob. Used by the
+ *  proofing path (and as a fallback when a full-res render isn't available). */
 async function previewBlob(photo) {
   if (photo.thumbnailBlob) return photo.thumbnailBlob;
   if (photo.thumbnailUrl) {
@@ -44,14 +50,44 @@ async function previewBlob(photo) {
   return null;
 }
 
-/** Which photos to publish, per the configured source. */
+// ── Folder scoping ────────────────────────────────────────────────────────────
+// Galleries are organized per folder: picks/all are scoped to the Library's
+// active folder so each gallery covers one shoot. Mirrors core's inFolder()
+// (visible-photos.ts) including the showSubfolderPhotos preference.
+
+function activeFolder() { try { return uiStore().getState().activeFolder; } catch { return null; } }
+function folderLabel(f) { return f == null ? "All Photos" : f === "" ? "Project root" : f; }
+function showSubfolders() { try { return !!api.stores.useSettings.getState().showSubfolderPhotos; } catch { return false; } }
+function inActiveFolder(p, f) {
+  if (f == null) return true; // "All Photos"
+  if (p.folder === f) return true;
+  if (!showSubfolders()) return false;
+  return f === "" || (p.folder && p.folder.startsWith(f + "/"));
+}
+
+/** Which photos to publish, per the configured source and active folder. */
 function sourcePhotos() {
   const c = cat().getState();
   const all = c.photos;
   const s = settings();
+  // An explicit selection is taken verbatim — folder scoping would be surprising.
   if (s.source === "selected") return all.filter((p) => c.selectedIds.has(p.id));
-  if (s.source === "all") return all.filter((p) => p.flag !== "reject");
-  return all.filter((p) => p.flag === "pick"); // default: picks
+  const f = activeFolder();
+  const base = s.source === "all" ? all.filter((p) => p.flag !== "reject") : all.filter((p) => p.flag === "pick");
+  return base.filter((p) => inActiveFolder(p, f));
+}
+
+/** Export settings for a public render: honor the user's export resolution and
+ *  quality (Preferences ▸ Export), but always JPEG for the web, and cap an
+ *  "Original" (null) long edge to the gallery's own web-size setting so we don't
+ *  push full-sensor files. Returns null when the host predates api.export. */
+function buildExportSettings(s) {
+  if (!api.export || typeof api.export.getDefaultSettings !== "function") return null;
+  let def = null;
+  try { def = api.export.getDefaultSettings(); } catch { return null; }
+  if (!def) return null;
+  const longEdge = def.longEdge != null ? def.longEdge : s.webEdge;
+  return { ...def, format: "image/jpeg", longEdge };
 }
 
 function ensureCloudPoller() {
@@ -65,8 +101,7 @@ function makeStore() {
     busy: false,
     progress: null,
     status: "",
-    lastApplied: null,                                   // info from the poller
-    lastPublished: api.settings.get("lastPublished", null), // { projectId, token, title, kind }
+    lastApplied: null, // info from the poller (most recent applied decision)
 
     setStatusMsg(status) { set({ status }); },
 
@@ -77,22 +112,36 @@ function makeStore() {
       if (!photos.length) { set({ status: "No photos match the selected source." }); return; }
       if (!cloudReady(api)) { set({ status: "Add your Worker URL and key in Preferences → Web Tools." }); return; }
 
-      set({ busy: true, status: "Preparing images…", progress: { done: 0, total: photos.length } });
+      // progress stays null until the upload phase drives the bar; the render
+      // phase (public) reports through onStatus instead, so the button/bar don't
+      // claim "Uploading" while images are still rendering.
+      set({ busy: true, status: "Preparing images…", progress: null });
       try {
         const s = settings();
+        const exportSettings = kind === "public" ? buildExportSettings(s) : null;
+        const folder = folderLabel(activeFolder());
         const project = await publishToCloud(api, {
           kind, title: meta.title, client: meta.client, photographer: s.photographer,
-          source: photos, webEdge: s.webEdge, quality: s.quality,
-          getBlob: previewBlob, onProgress: (done, total) => set({ progress: { done, total } }),
+          source: photos, webEdge: s.webEdge, quality: s.quality, exportSettings, folder,
+          getBlob: previewBlob,
+          onProgress: (done, total) => set({ progress: { done, total } }),
+          onStatus: (msg) => set({ status: msg }),
         });
-        const published = { projectId: project.projectId, token: project.token, title: project.title, kind };
-        api.settings.set("lastPublished", published);
         ensureCloudPoller();
-        set({ lastPublished: published, status: `Published "${project.title}".` });
+        set({ status: `Published "${project.title}".` });
       } catch (e) {
         set({ status: "Publish failed: " + (e && e.message ? e.message : String(e)) });
       } finally {
         set({ busy: false, progress: null });
+      }
+    },
+
+    async unpublish(projectId) {
+      try {
+        await unpublishGallery(api, projectId);
+        set({ status: "Gallery removed." });
+      } catch (e) {
+        set({ status: "Couldn't remove the gallery: " + (e && e.message ? e.message : String(e)) });
       }
     },
 
@@ -112,35 +161,39 @@ function makeStore() {
 }
 
 // ── UI ──────────────────────────────────────────────────────────────────────
+// Generic controls (buttons, inputs, segmented control, progress bar) come from
+// the shared core UI kit (api.ui) so they match the app exactly. Only the
+// domain-specific bits below — the status dot, share box, etc. — stay hand-rolled.
 const S = {
   wrap: { padding: "10px", display: "flex", flexDirection: "column", gap: "10px", fontSize: "11px", color: "var(--color-text-primary)" },
   sec: { display: "flex", flexDirection: "column", gap: "6px" },
   secHead: { display: "flex", alignItems: "center", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--color-text-secondary)", borderBottom: "1px solid var(--color-border)", paddingBottom: "3px" },
-  field: { background: "var(--color-surface-2)", border: "1px solid var(--color-border)", borderRadius: "3px", color: "var(--color-text-primary)", font: "inherit", padding: "4px 5px", width: "100%", boxSizing: "border-box" },
   row: { display: "flex", gap: "6px", alignItems: "center" },
-  btn: { padding: "6px 8px", background: "var(--color-surface-3)", border: "1px solid var(--color-border)", borderRadius: "3px", color: "var(--color-text-primary)", cursor: "pointer", font: "inherit" },
   status: { color: "var(--color-text-secondary)", minHeight: "26px", lineHeight: 1.4 },
-  bar: { height: "3px", background: "var(--color-surface-3)", borderRadius: "2px", overflow: "hidden" },
   dot: (color) => ({ width: "7px", height: "7px", borderRadius: "50%", background: color, flex: "0 0 auto" }),
-  seg: { display: "flex", border: "1px solid var(--color-border)", borderRadius: "3px", overflow: "hidden" },
-  segBtn: { flex: 1, padding: "5px 6px", background: "var(--color-surface-2)", border: "none", borderRight: "1px solid var(--color-border)", color: "var(--color-text-secondary)", cursor: "pointer", font: "inherit" },
-  segOn: { background: "var(--color-accent)", color: "#fff" },
   share: { display: "flex", flexDirection: "column", gap: "6px", padding: "8px", border: "1px solid var(--color-accent)", borderRadius: "4px", background: "var(--color-surface-2)" },
   shareUrl: { fontSize: "11px", color: "var(--color-accent)", wordBreak: "break-all", userSelect: "all" },
+  folderHead: { fontSize: "10px", color: "var(--color-text-muted)", display: "flex", alignItems: "center", gap: "4px", marginTop: "2px" },
 };
-const btnPrimary = { ...S.btn, background: "var(--color-accent)", border: "1px solid var(--color-accent)", color: "#fff" };
-const dis = (s) => ({ ...s, opacity: 0.45, cursor: "default" });
+
+/** Shown when the host core predates the api.ui kit this panel relies on. */
+function uiUnavailable() {
+  return h("div", { style: { padding: "10px", fontSize: "11px", color: "var(--color-text-muted)" } }, "Update Safelight to use this panel.");
+}
 
 function WebToolsPanel() {
+  if (!api.ui) return uiUnavailable();
+  const { Button, TextInput, SegmentedControl, ProgressBar } = api.ui;
+  const Badge = api.ui.Badge || (({ children }) => h("span", { style: { fontSize: "9px", color: "var(--color-text-secondary)" } }, children));
   const { useState, useEffect } = React;
   const selectedIds = cat()((s) => s.selectedIds);
   cat()((s) => s.photos); // re-render when the catalog changes
+  const curFolder = uiStore()((s) => s.activeFolder); // re-render when the folder changes
 
   const busy = store((s) => s.busy);
   const progress = store((s) => s.progress);
   const status = store((s) => s.status);
   const lastApplied = store((s) => s.lastApplied);
-  const lastPublished = store((s) => s.lastPublished);
   const st = store.getState();
 
   const [, setTick] = useState(0);
@@ -149,7 +202,7 @@ function WebToolsPanel() {
   const s = settings();
 
   const cloudOk = cloudReady(api);
-  const shareUrl = lastPublished ? cloudShareLink(cloudConfig(api), lastPublished.projectId, lastPublished.token) : "";
+  const cfg = cloudConfig(api);
   const copy = (text) => { try { navigator.clipboard.writeText(text); st.setStatusMsg("Link copied."); } catch {} };
   // Only open absolute http(s) links — a schemeless URL would resolve against the
   // app:// origin and open a new app window instead of the system browser.
@@ -162,7 +215,42 @@ function WebToolsPanel() {
   const [clientEmail, setClientEmail] = useState("");
 
   const count = sourcePhotos().length;
-  const pct = progress && progress.total ? Math.round((100 * progress.done) / progress.total) : 0;
+  const sourceLabel = s.source === "selected" ? "selected photos" : s.source === "all" ? "all (non-rejected)" : "your picks";
+
+  // Galleries grouped by folder, newest first within each group (list is already
+  // newest-first). Reads from settings; re-renders via the onChange tick above.
+  const galleries = listGalleries(api);
+  const groups = [];
+  const byFolder = new Map();
+  for (const g of galleries) {
+    const key = g.folder || "All Photos";
+    if (!byFolder.has(key)) { byFolder.set(key, []); groups.push(key); }
+    byFolder.get(key).push(g);
+  }
+
+  const renderGallery = (g) => {
+    const url = cloudShareLink(cfg, g.projectId, g.token);
+    const decision = g.lastInfo
+      ? `${g.lastInfo.client || "Client"}: ${g.lastInfo.counts.pick} pick · ${g.lastInfo.counts.reject} reject${g.lastInfo.note ? ` — “${g.lastInfo.note}”` : ""}`
+      : "Awaiting client decision…";
+    return h("div", { key: g.projectId, style: S.share },
+      h("div", { style: S.row },
+        h("span", { style: { flex: 1, fontWeight: 600, wordBreak: "break-word" } }, g.title),
+        h(Badge, null, g.kind === "public" ? "Public" : "Proofing")),
+      h("div", { style: { fontSize: "10px", color: "var(--color-text-secondary)" } }, `${g.count} photo${g.count === 1 ? "" : "s"}`),
+      url
+        ? h(React.Fragment, null,
+            h("div", { style: S.shareUrl, title: url }, url),
+            h("div", { style: S.row },
+              h(Button, { variant: "primary", size: "sm", onClick: () => openUrl(url) }, "Open"),
+              h(Button, { size: "sm", onClick: () => copy(url) }, "Copy"),
+              h("span", { style: { flex: 1 } }),
+              h(Button, { variant: "ghost", size: "sm", onClick: () => st.unpublish(g.projectId) }, "Remove")))
+        : h("div", { style: { fontSize: "10px", color: "var(--color-warning, #d29922)" } }, "Add your Worker URL + key to get the link."),
+      g.kind === "proofing"
+        ? h("div", { style: { fontSize: "10px", color: "var(--color-text-secondary)" } }, decision)
+        : null);
+  };
 
   return (
     <div style={S.wrap}>
@@ -170,7 +258,7 @@ function WebToolsPanel() {
       <div style={S.sec}>
         <div style={S.secHead}>
           <span style={{ flex: 1 }}>Status</span>
-          <button style={{ ...S.btn, padding: "2px 6px", fontSize: "10px" }} onClick={openSetup}>Set up</button>
+          <Button variant="ghost" size="sm" onClick={openSetup}>Set up</Button>
         </div>
         <div style={S.row}>
           <span style={S.dot(connColor(conn.state))} />
@@ -193,64 +281,63 @@ function WebToolsPanel() {
       {/* New gallery */}
       <div style={S.sec}>
         <div style={S.secHead}>New gallery</div>
-        <div style={S.seg}>
-          {[["proofing", "Proofing"], ["public", "Public"]].map(([m, label], i) => (
-            <button key={m}
-              style={{ ...S.segBtn, ...(i === 0 ? {} : { borderRight: "none" }), ...(mode === m ? S.segOn : null) }}
-              onClick={() => setMode(m)}
-              title={m === "proofing" ? "Client picks/rejects come back to you" : "A public portfolio gallery (no client review)"}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <input style={S.field} placeholder="Gallery title" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <SegmentedControl
+          value={mode}
+          onChange={setMode}
+          size="sm"
+          options={[
+            { value: "proofing", label: "Proofing", title: "Client picks/rejects come back to you" },
+            { value: "public", label: "Public", title: "A public portfolio gallery (no client review)" },
+          ]}
+        />
+        <TextInput placeholder="Gallery title" value={title} onChange={setTitle} />
         {mode === "proofing" && (
           <React.Fragment>
-            <input style={S.field} placeholder="Client name" value={clientName} onChange={(e) => setClientName(e.target.value)} />
-            <input style={S.field} placeholder="Client email (optional)" value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} />
+            <TextInput placeholder="Client name" value={clientName} onChange={setClientName} />
+            <TextInput placeholder="Client email (optional)" value={clientEmail} onChange={setClientEmail} />
           </React.Fragment>
         )}
         <div style={{ color: "var(--color-text-secondary)" }}>
-          Source: <b>{s.source === "selected" ? "selected photos" : s.source === "all" ? "all (non-rejected)" : "your picks"}</b> — {count} photo{count === 1 ? "" : "s"}
+          Source: <b>{sourceLabel}</b>
+          {s.source !== "selected" && <React.Fragment> in <b>{folderLabel(curFolder)}</b></React.Fragment>}
+          {" "}— {count} photo{count === 1 ? "" : "s"}
           {s.source === "selected" ? ` (${selectedIds.size} selected)` : ""}
         </div>
-        <button
-          style={busy || !cloudOk || !count ? dis(btnPrimary) : btnPrimary}
+        {mode === "public" && (
+          <div style={{ fontSize: "10px", color: "var(--color-text-muted)" }}>
+            Rendered at your export resolution/quality (Preferences ▸ Export).
+          </div>
+        )}
+        <Button
+          variant="primary"
+          full
           disabled={busy || !cloudOk || !count}
           onClick={() => st.publish({ kind: mode, title: title || "Untitled gallery", client: { name: clientName, email: clientEmail } })}
         >
-          {busy && progress ? `Uploading ${progress.done}/${progress.total}…` : `Publish ${mode === "public" ? "portfolio" : "proofing"} · ${count} photo${count === 1 ? "" : "s"}`}
-        </button>
-        {busy && progress && <div style={S.bar}><div style={{ height: "100%", width: pct + "%", background: "var(--color-accent)" }} /></div>}
-
-        {lastPublished && (
-          <div style={S.share}>
-            <div style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>
-              {lastPublished.kind === "public" ? "Public gallery link" : "Send this link to your client"}:
-            </div>
-            {shareUrl ? (
-              <React.Fragment>
-                <div style={S.shareUrl} title={shareUrl}>{shareUrl}</div>
-                <div style={S.row}>
-                  <button style={btnPrimary} onClick={() => openUrl(shareUrl)}>Open</button>
-                  <button style={S.btn} onClick={() => copy(shareUrl)}>Copy link</button>
-                </div>
-              </React.Fragment>
-            ) : (
-              <div style={{ fontSize: "11px", color: "var(--color-warning, #d29922)" }}>
-                Add your Worker URL + key in Preferences to get the link.
-              </div>
-            )}
-          </div>
-        )}
+          {busy ? (progress ? `Uploading ${progress.done}/${progress.total}…` : "Working…") : `Publish ${mode === "public" ? "portfolio" : "proofing"} · ${count} photo${count === 1 ? "" : "s"}`}
+        </Button>
+        {busy && progress && <ProgressBar value={progress.total ? progress.done / progress.total : 0} />}
       </div>
+
+      {/* Your galleries */}
+      {galleries.length > 0 && (
+        <div style={S.sec}>
+          <div style={S.secHead}>Your galleries</div>
+          {groups.map((folder) => (
+            <React.Fragment key={folder}>
+              <div style={S.folderHead}>{folder}</div>
+              {byFolder.get(folder).map(renderGallery)}
+            </React.Fragment>
+          ))}
+        </div>
+      )}
 
       {/* Client decisions */}
       <div style={S.sec}>
         <div style={S.secHead}>Client decisions</div>
         <div style={S.row}>
-          <button style={cloudOk ? S.btn : dis(S.btn)} disabled={!cloudOk} onClick={() => st.checkNow()}>Check now</button>
-          <span style={{ flex: 1, color: "var(--color-text-secondary)", fontSize: "10px" }}>Auto-checks for replies</span>
+          <Button size="sm" disabled={!cloudOk} onClick={() => st.checkNow()}>Check now</Button>
+          <span style={{ flex: 1, color: "var(--color-text-secondary)", fontSize: "10px" }}>Auto-checks every gallery for replies</span>
         </div>
         {lastApplied && (
           <div style={{ color: "var(--color-text-secondary)" }}>

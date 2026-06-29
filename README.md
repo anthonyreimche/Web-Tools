@@ -95,11 +95,21 @@ and which photos a gallery includes. Done.
 
 1. Flag your keepers in the Library (press **P**).
 2. Open the **Web Tools** panel → choose **Proofing** or **Public**, type a title
-   (+ client name for proofing) → **Publish**.
-3. A **share link** appears — **Open** to preview, **Copy link** to send it.
+   (+ client name for proofing) → **Publish**. A gallery covers the folder you're
+   viewing, so each one maps to a single shoot.
+3. Every gallery you publish is listed under **Your galleries**, grouped by
+   folder, each with its **share link** — **Open** to preview, **Copy** to send,
+   **Remove** to take it offline. Publish as many as you like; they stay live in
+   parallel, so you can keep editing other folders while a client reviews.
 4. The client picks/rejects and submits.
-5. Their choices appear back in your Library automatically (the panel shows a
-   note; the flags update). Edit from there.
+5. Their choices sync back into your Library automatically — each gallery is
+   polled on its own, so decisions land whenever the client finishes, even hours
+   later. The panel shows a per-gallery summary; the flags update.
+
+**Image quality.** **Public** (portfolio) galleries are rendered through the full
+develop pipeline at your **Export** resolution and quality (Preferences ▸ Export),
+so they're full-resolution — not the low-res grid preview. **Proofing** galleries
+use the fast catalog preview, which is all a pick/reject pass needs.
 
 ## Optional: email when a client decides
 

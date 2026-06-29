@@ -173,6 +173,10 @@ function galleryHtml(id) {
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:18px 20px}
 .card{background:var(--s);border:2px solid var(--b);border-radius:8px;overflow:hidden}.card.pick{border-color:var(--pick)}.card.reject{border-color:var(--rej);opacity:.7}
 .card img{width:100%;aspect-ratio:3/2;object-fit:contain;display:block;background:var(--s2);cursor:zoom-in}
+.grid.pub{display:flex;flex-wrap:wrap;align-content:flex-start}
+.grid.pub .card{height:240px;flex-grow:1;border-width:1px}
+.grid.pub .card img{width:100%;height:100%;aspect-ratio:auto;object-fit:cover}
+.grid.pub::after{content:"";flex-grow:999999}
 .acts{display:flex}.acts button{flex:1;padding:9px;border:none;cursor:pointer;background:var(--s2);color:var(--m);font-weight:600;border-top:1px solid var(--b)}
 .acts button+button{border-left:1px solid var(--b)}.acts .p.on{background:var(--pick);color:#06210f}.acts .r.on{background:var(--rej);color:#2c0710}
 .bar{position:fixed;bottom:0;left:0;right:0;z-index:6;display:flex;flex-direction:column;gap:8px;padding:12px 20px;background:rgba(20,22,26,.96);border-top:1px solid var(--b)}
@@ -194,7 +198,7 @@ function galleryHtml(id) {
 .lacts{display:none;gap:12px}.lb.proof .lacts{display:flex}
 .lacts button{display:flex;align-items:center;gap:7px;padding:12px 26px;border-radius:30px;font-size:15px;font-weight:600;color:#fff;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);transition:transform .12s,background .15s,border-color .15s}.lacts button:active{transform:scale(.93)}
 .lacts .lp.on{background:var(--pick);color:#06210f;border-color:var(--pick)}.lacts .lr.on{background:var(--rej);color:#2c0710;border-color:var(--rej)}
-@media (max-width:600px){.grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:12px}.top{padding:12px 14px;flex-wrap:wrap;gap:4px 12px}.top>div:first-child{flex:1 1 100%}.top h1{font-size:16px}.counts{font-size:12px;gap:10px}.acts button{padding:12px 8px}.bar{padding:10px 14px}.lb img{max-width:90vw}.lacts button{padding:13px 30px}}
+@media (max-width:600px){.grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:12px}.grid.pub .card{height:160px}.top{padding:12px 14px;flex-wrap:wrap;gap:4px 12px}.top>div:first-child{flex:1 1 100%}.top h1{font-size:16px}.counts{font-size:12px;gap:10px}.acts button{padding:12px 8px}.bar{padding:10px 14px}.lb img{max-width:90vw}.lacts button{padding:13px 30px}}
 </style></head><body>
 <div class=top><div><h1 id=title>Gallery</h1><p id=sub class=muted></p></div><div class=counts id=counts></div></div>
 <div class=grid id=grid></div>
@@ -217,7 +221,7 @@ function set(pid,v){ch[pid]=ch[pid]===v?"none":v;persist();card(pid);counts();if
 function card(pid){var c=document.querySelector('[data-c="'+pid+'"]');if(!c||pub)return;var v=ch[pid];c.className="card"+(v==="pick"?" pick":v==="reject"?" reject":"");c.querySelector(".p").classList.toggle("on",v==="pick");c.querySelector(".r").classList.toggle("on",v==="reject")}
 function counts(){if(pub){$("counts").innerHTML='<span class=muted>'+P.photos.length+" photos</span>";return}var pk=0,rj=0;Object.keys(ch).forEach(function(k){if(ch[k]==="pick")pk++;else if(ch[k]==="reject")rj++});$("counts").innerHTML='<span style="color:var(--pick)">Picks <b>'+pk+'</b></span><span style="color:var(--rej)">Rejects <b>'+rj+'</b></span><span class=muted>of '+P.photos.length+"</span>"}
 function btn(cl,tx,pid,v){var b=document.createElement("button");b.className=cl;b.textContent=tx;b.onclick=function(){set(pid,v)};return b}
-function render(){var g=$("grid");g.innerHTML="";P.photos.forEach(function(ph,i){var c=document.createElement("div");c.setAttribute("data-c",ph.photoId);var im=document.createElement("img");im.loading="lazy";im.src=img(ph.photoId,1);im.onclick=function(){open(i)};c.appendChild(im);if(!pub){var a=document.createElement("div");a.className="acts";a.appendChild(btn("p","✓ Pick",ph.photoId,"pick"));a.appendChild(btn("r","✗ Reject",ph.photoId,"reject"));c.appendChild(a)}g.appendChild(c);card(ph.photoId)});counts()}
+function render(){var g=$("grid");g.className="grid"+(pub?" pub":"");g.innerHTML="";var BASEH=window.innerWidth<=600?160:240;P.photos.forEach(function(ph,i){var c=document.createElement("div");c.className="card";c.setAttribute("data-c",ph.photoId);var im=document.createElement("img");im.loading="lazy";im.src=img(ph.photoId,1);im.onclick=function(){open(i)};c.appendChild(im);if(pub){var ar=(ph.width&&ph.height)?ph.width/ph.height:1.5;c.style.flexGrow=ar;c.style.flexBasis=(BASEH*ar)+"px"}else{var a=document.createElement("div");a.className="acts";a.appendChild(btn("p","✓ Pick",ph.photoId,"pick"));a.appendChild(btn("r","✗ Reject",ph.photoId,"reject"));c.appendChild(a)}g.appendChild(c);card(ph.photoId)});counts()}
 var img0,stage,SX=0,SY=0,dx=0,dy=0,axis=null,drag=false;
 var DEAD=10,HT=70,VT=90; // deadzone, horizontal/vertical commit thresholds (px)
 function setLbInfo(){$("lcnt").textContent=(li+1)+" / "+P.photos.length;$("lfn").textContent=P.photos[li].filename||""}

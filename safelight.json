@@ -1,11 +1,13 @@
 {
   "id": "web-tools",
   "name": "Web Tools",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "minAppVersion": "2.4.4",
   "description": "Publish client proofing galleries to the web and pull the client's picks/rejects back into Safelight. Companion to the Safelight Web Tools service.",
   "author": "Anthony",
-  "main": "dist/index.js",
+  "main": "extension/dist/index.js",
   "categories": ["Export"],
   "keywords": ["gallery", "proofing", "publish", "client", "web"],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": "anthonyreimche/Web-Tools"
 }

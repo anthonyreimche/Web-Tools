@@ -1,2 +1,15 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# The Safelight in-app store installs an extension by downloading the repo's
+# GitHub source archive (which honours `export-ignore`) and unpacking it into
+# the user's plugins folder. This repo is a monorepo, so exclude everything that
+# is dev-only — the Cloudflare worker, the CLI, monorepo tooling and the shared
+# sources (already inlined into extension/dist/index.js at build time). What
+# ships to users is just the extension plus the root manifest, README and LICENSE.
+/cli              export-ignore
+/worker           export-ignore
+/scripts          export-ignore
+/shared           export-ignore
+/package.json     export-ignore
+/package-lock.json export-ignore
